@@ -255,7 +255,5 @@ st.caption('''© 2025 · Tanjana Harings · Lehrtool für das Praktikum „Krank
 
 with st.expander("Über diese App"):
     st.caption('''Diese webbasierte Beratungshilfe wurde als Lehr- und Übungstool für das Praktikum "Krankheitslehre I - Übungsapotheke" im Studiengang Pharmazie an der Universität Leipzig entwickelt.''')
-    st.caption('''Konzeption und Umsetzung:  
-    Nele Sebök, Tanjana Harings''')
-    st.caption('''Kontakt:  
-    Tanjana Harings, Apothekerin, Wissenschaftliche Mitarbeiterin, Klinische Pharmazie, Institut für Pharmazie, Medizinische Fakultät, Universität Leipzig, tanjana.harings@uni-leipzig.de''')
+    st.caption('''Konzeption und Umsetzung: Nele Sebök, Tanjana Harings''')
+    st.caption('''Kontakt: Tanjana Harings, Apothekerin, Wissenschaftliche Mitarbeiterin, Klinische Pharmazie, Institut für Pharmazie, Medizinische Fakultät, Universität Leipzig, tanjana.harings@uni-leipzig.de''')
