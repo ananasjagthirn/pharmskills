@@ -86,7 +86,7 @@ st.sidebar.header("Filter")
 #ls_ind = list(set(ls_ind))
 
 #vereinfacht laut chatgpt
-ls_ind = sorted(set(df["indication"].str.split(";").explode().str.strip()))
+ls_ind = sorted(set(df["indication"].str.split("; ").explode().str.strip()))
 
 #2. multiselect
 indikationen_filter = st.sidebar.multiselect(
@@ -98,7 +98,7 @@ indikationen_filter = st.sidebar.multiselect(
 df_ind = df.copy()
 if indikationen_filter:
     selected = set(indikationen_filter)
-    df_ind = df_ind[df_ind["indication"].apply(lambda s: bool(selected.intersection({i.strip() for i in s.split(";")})))]
+    df_ind = df_ind[df_ind["indication"].apply(lambda s: bool(selected.intersection({i.strip() for i in s.split("; ")})))]
 
 ls_drf = sorted(df_ind["drf"].dropna().unique().tolist())
 #wenn der filter indikation geändert wird
@@ -119,9 +119,9 @@ st.sidebar.divider()
 suchtext = st.sidebar.text_input("Freitextsuche (Präparat oder Wirkstoff)")
 
 #wenn was in excel geändert wurde, nur anschalten, wenn App überarbeitet wird
-#if st.sidebar.button("Daten neu laden"):
-    #st.cache_data.clear()
-    #st.rerun()
+if st.sidebar.button("Daten neu laden"):
+    st.cache_data.clear()
+    st.rerun()
 
 #filter anwenden
 filtered = df_ind.copy()
