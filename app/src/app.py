@@ -4,59 +4,103 @@ from pathlib import Path
 
 #befehl für terminal um app lokal zu starten: streamlit run app/src/app.py
 
+#grundeinstellung für streamlit
 st.set_page_config(page_title="Übungsapotheke", layout="wide")
 
-#pfade zu ordner und bildern
+#PFADE
 APP_DIR = Path(__file__).resolve().parent.parent
-IMAGES_DIR = APP_DIR / "data" / "images"
-EVIDENCE_DIR = APP_DIR / "data" / "data_evidence.xlsx"
+DATA_DIR = APP_DIR / "data"
+IMAGES_DIR = DATA_DIR / "images"
+DATA_FULL_PATH = DATA_DIR / "data_full.xlsx"
+EVIDENCE_PATH = DATA_DIR / "data_evidence.xlsx"
 
-#daten laden
-@st.cache_data
-def load_data():
-    base_dir = Path(__file__).resolve().parent.parent
-    data_path = base_dir / "data" / "data_full.xlsx"
-    df = pd.read_excel(data_path, dtype={"pzn": str})
-    df["pzn"] = df["pzn"].str.strip().str.zfill(8)
-    return df
+#HILFSFUNKTIONEN
+#text vereinheitlichen: string, trimm, klein
+def norm(text) -> str:
+    return str(text).strip().lower()
 
-#evidence data laden
-@st.cache_data
-def load_evidence():
-    ev = pd.read_excel(EVIDENCE_DIR)
-    ev.columns = ev.columns.str.strip().str.lower()
+#text an semikolon trennen und als liste zurückgeben
+def split_semicolon(text) -> list:
+    parts = str(text).split(";")
+    clean = []
+    for p in parts:
+        p = p.strip()
+        if p != "":
+            clean.append(p)
+    return clean
 
-    #wirkstoff-liste als einzelne keywords
-    ev_long = ev.copy()
-    ev_long["drug_kw"] = ev_long["drug"].astype(str).str.split(";", regex=True)
-    #eine Zeile pro Wirkstoff-keyword
-    ev_long = ev_long.explode("drug_kw", ignore_index=True)
-
-    ev_long["drug_kw"] = ev_long["drug_kw"].astype(str).str.strip().str.lower()
-    ev_long["ind_key"] = ev_long["ind"].astype(str).str.strip().str.lower()
-    return ev_long
-
-#bild anhand der pzn finden
+#bild zur pzn im IMAGES_DIR finden
 def find_image_for_pzn(pzn):
     pzn = str(pzn).strip()
     matches = list(IMAGES_DIR.glob(f"{pzn}.*"))
-    return matches[0] if matches else None
+    if len(matches) > 0:
+        return matches[0]
+    return None
 
+#DATEN LADEN
+@st.cache_data
+def load_data():
+    df = pd.read_excel(DATA_FULL_PATH, dtype={"pzn": str})
+    #spalten vereinheitlichen
+    df.columns = [norm(c) for c in df.columns]
+    #pzn sauber formatieren (8-stellig, führende Nullen)
+    df["pzn"] = df["pzn"].astype(str).str.strip().str.zfill(8)
+    #plant normalisieren
+    if "plant" in df.columns:
+        df["plant"] = df["plant"].fillna("").apply(norm)
+
+    #hilfslisten für filter für indikation und wirkstoffe
+    ind_lists = []
+    drug_lists = []
+
+    for _, row in df.iterrows():
+        inds = split_semicolon(row.get("indication", ""))
+        inds_norm = []
+        for i in inds:
+            inds_norm.append(norm(i))
+        ind_lists.append(inds_norm)
+
+        drugs = split_semicolon(row.get("drug", ""))
+        drugs_norm = []
+        for d in drugs:
+            drugs_norm.append(norm(d))
+        drug_lists.append(drugs_norm)
+
+    df["ind_list"] = ind_lists
+    df["drug_list"] = drug_lists
+
+    return df
+
+@st.cache_data
+def load_evidence():
+    ev = pd.read_excel(EVIDENCE_PATH)
+    #spalten vereinheitlichen
+    ev.columns = [norm(c) for c in ev.columns]
+
+    #long-format: pro indikation und pro wirkstoff eine zeile
+    rows = []
+
+    for _, r in ev.iterrows():
+        ind_raw = r.get("ind", "")
+        ind_key = norm(ind_raw)
+
+        drug_raw = r.get("drug", "")
+        drug_key = split_semicolon(drug_raw)
+
+        for key in drug_key:
+            new_row = dict(r)
+            new_row["ind_key"] = ind_key
+            new_row["drug_key"] = norm(key)
+            rows.append(new_row)
+
+    ev_long = pd.DataFrame(rows)
+    return ev_long
+
+#eigentlicher Start: daten laden
 df = load_data()
-df.columns = df.columns.str.strip().str.lower()
-
-#wirkstoffe in data_full zerlegen
-import re
-
-def split_list(cell: str) -> list[str]:
-    parts = re.split(r"[;]", str(cell))
-    return [p.strip() for p in parts if p.strip()]
-
-def norm(s: str) -> str:
-    return str(s).strip().lower()
-
 ev_df = load_evidence()
 
+#Titel, disclaimer, hinweis
 st.title("Beratungshilfe: Selbstmedikation bei Erkältung")
 
 with st.expander("Disclaimer"):
@@ -68,73 +112,119 @@ with st.expander("Disclaimer"):
     Eine Weitergabe oder Anwendung der Inhalte außerhalb des genannten Lehrkontextes ist nicht vorgesehen.''')
 
 
-st.info(
-    ":material/lightbulb: Nutze die Filter in der Seitenleiste, um passende Präparate zu finden. "
-    "Wähle anschließend ein Präparat aus, um die Informationen zum Präparat anzuzeigen."
-)
+st.info(":material/lightbulb: Nutze die Filter in der Seitenleiste, um passende Präparate zu finden. "
+    "Wähle anschließend ein Präparat aus, um die Informationen zum Präparat anzuzeigen.")
 
-#sidebar
+#sidebar filter
 st.sidebar.header("Filter")
 
-#dynamische Listen aus den Daten für filter
-#Indikationen
-#1. indikationen splitten
-#ls_ind = []
-#for index, row in df.iterrows():
-#    if isinstance(row["indication"], str):
-#        ls_ind.extend(row["indication"].split(", "))
-#ls_ind = list(set(ls_ind))
+#indikationen
+all_inds = []
+for inds in df["ind_list"]:
+    for i in inds:
+        all_inds.append(i)
+all_inds_unique = sorted(list(set(all_inds)))
 
-#vereinfacht laut chatgpt
-ls_ind = sorted(set(df["indication"].str.split("; ").explode().str.strip()))
+#für schöne anzeige: anfangsbuchstabe groß anzeigen
+pretty_to_norm = {}
+for i in all_inds_unique:
+    pretty_to_norm[i.title()] = i
 
-#2. multiselect
-indikationen_filter = st.sidebar.multiselect(
-    "Nach Indikation filtern",
-    options=ls_ind,
-    default=[])
+ind_options_pretty = sorted(pretty_to_norm.keys())
 
-#3. filter anwenden
+indikationen_filter_pretty = st.sidebar.multiselect(
+    "Nach Indikationen filtern",
+    options=ind_options_pretty,
+    default=[]
+)
+
+indikationen_filter = []
+for p in indikationen_filter_pretty:
+    indikationen_filter.append(pretty_to_norm[p])
+
+#daten nach indikationen filtern
 df_ind = df.copy()
-if indikationen_filter:
+if len(indikationen_filter) > 0:
     selected = set(indikationen_filter)
-    df_ind = df_ind[df_ind["indication"].apply(lambda s: bool(selected.intersection({i.strip() for i in s.split("; ")})))]
+    keep_rows = []
 
-ls_drf = sorted(df_ind["drf"].dropna().unique().tolist())
-#wenn der filter indikation geändert wird
+    for _, row in df_ind.iterrows():
+        row_inds = row["ind_list"]
+        found = False
+        for i in row_inds:
+            if i in selected:
+                found = True
+                break
+        keep_rows.append(found)
+    df_ind = df_ind[keep_rows]
+
+#Darreichungsformen
+drf_set = set()
+for x in df_ind["drf"].dropna().tolist():
+    drf_set.add(x)
+
+ls_drf = sorted(list(drf_set))
+
+#wenn der filter indikation geändert wird, auswahl drf nur behalten wenn noch gültig
 prev = st.session_state.get("darreichung_filter", [])
-prev = [x for x in prev if x in ls_drf]
+prev_valid = []
+for x in prev:
+    if x in ls_drf:
+        prev_valid.append(x)
 
 darreichung_filter = st.sidebar.multiselect(
-    "Nach Darreichungsform filtern",
+    "Nach Darreichungsformen filtern",
     options=ls_drf,
-    default=prev,
+    default=prev_valid,
     key="darreichung_filter")
 
-
-pflanzlich_filter = st.sidebar.checkbox("Nur pflanzliche Präparate anzeigen")
+#pflanzlich filter
+pflanzenwahl = st.sidebar.selectbox(
+    "Nach pflanzlich/nicht pflanzlich filtern",
+    options=["keine Auswahl", "Pflanzlich", "Nicht Pflanzlich"],
+    index=0
+)
 
 st.sidebar.divider()
-
+#freitextsuche
 suchtext = st.sidebar.text_input("Freitextsuche (Präparat oder Wirkstoff)")
 
-#wenn was in excel geändert wurde, nur anschalten, wenn App überarbeitet wird
+#wenn was in excel geändert wurde: reload data (nur anschalten, wenn App überarbeitet wird)
 if st.sidebar.button("Daten neu laden"):
     st.cache_data.clear()
     st.rerun()
 
-#filter anwenden
+#FILTER ANWENDEN
 filtered = df_ind.copy()
 
-if darreichung_filter:
-    filtered = filtered[filtered["drf"].isin(darreichung_filter)]
+#drf
+if len(darreichung_filter) > 0:
+    keep_rows = []
+    for _, row in filtered.iterrows():
+        keep_rows.append(row.get("drf") in darreichung_filter)
+    filtered = filtered[keep_rows]
 
-if pflanzlich_filter:
-    filtered = filtered[filtered["plant"].str.lower() == "ja"]
+#pflanzlich
+if pflanzenwahl != "keine Auswahl":
+    keep_rows = []
+    for _, row in filtered.iterrows():
+        plant_val = row["plant"]
+        if pflanzenwahl == "Pflanzlich":
+          keep_rows.append(row["plant"] == "ja")
+        else:
+            keep_rows.append(row["plant"] == "nein")
+    filtered = filtered[keep_rows]
 
-if suchtext:
-    mask = (filtered["handelsname"].str.contains(suchtext, case=False, na=False) | filtered["drug"].str.contains(suchtext, case=False, na=False))
-    filtered = filtered[mask]
+#freitextsuche
+q = norm(suchtext)
+if q != "":
+    keep_rows = []
+    for _, row in filtered.iterrows():
+        name = norm(row.get("handelsname", ""))
+        drugs = norm(row.get("drug", ""))
+        hit = (q in name) or (q in drugs)
+        keep_rows.append(hit)
+    filtered = filtered[keep_rows]
 
 st.caption(f"Gefundene Präparate: {len(filtered)}")
 
@@ -142,21 +232,18 @@ if len(filtered) == 0:
     st.info("Keine Präparate mit diesen Kriterien gefunden.")
     st.stop()
 
-
-#Detailansicht
-
+#DETAILANSICHT
 def show_details(row: pd.Series):
     st.divider()
     st.header(row["handelsname"])
 
-    col1, col2, col3 = st.columns(spec=[3,1,2])
+    col1, _, col3 = st.columns([3,1,2])
 
     with col1:
-        tab_info, tab_guideline = st.tabs(
-            ["Details", "Leitlinie"]
-        )
-        with tab_info:
+        tab_info, tab_guideline = st.tabs(["Details", "Leitlinie"])
 
+        #tab infos zu präparat
+        with tab_info:
             st.subheader(":material/info: Infos")
             st.write(f"Indikation: {row['indication']}")
             st.write(f"Wirkstoff(e): {row['drug']}")
@@ -169,8 +256,8 @@ def show_details(row: pd.Series):
             st.write(f"Tagesmaximaldosis: {row['td']}")
 
             #hinweise nur anzeigen, wenn es welche gibt
-            hinweise = row.get("hinweise")
-            if isinstance(hinweise, str) and hinweise.strip():
+            hinweise = row.get("hinweise", "")
+            if isinstance(hinweise, str) and hinweise.strip() != "":
                 st.write(f"Weitere Hinweise: {row['hinweise']}")
             st.divider()
 
@@ -181,52 +268,73 @@ def show_details(row: pd.Series):
             st.subheader(":material/document_search: Quelle")
             st.write(f"{row['source']}")
 
-        # tab zur leitlinien empfehlung
+        #tab zur leitlinien empfehlung
         with tab_guideline:
-            #präparate indikation und wirkstoffe vorbereiten
-            ind_list = [norm(x) for x in split_list(row["indication"])]
-            ind_list = [i for i in ind_list if i]
-            drug_list = [norm(x) for x in split_list(row["drug"])]
+            ind_list = row["ind_list"]
+            drug_list = row["drug_list"]
 
-            #evidence auf passende indikationen einschränken
-            ev_ind = ev_df[ev_df["ind_key"].isin(ind_list)].copy()
+            #evidenz nach indikation filtern
+            ev_ind_rows = []
+            for _, erow in ev_df.iterrows():
+                if erow["ind_key"] in ind_list:
+                    ev_ind_rows.append(erow)
 
-            #treffer sammeln: evidenz-keyword muss im präparat-wirkstoff vorkommen (substring)
-            hits = []
+            if len(ev_ind_rows) == 0:
+                st.info("Keine Leitlinie zur Indikation gefunden.")
+                return
+
+            ev_ind = pd.DataFrame(ev_ind_rows)
+
+            #treffer für wirkstoff in evidenzdaten
+            hits_rows = []
+
             for drug in drug_list:
-                sub = ev_ind[ev_ind["drug_kw"].apply(lambda kw: kw in drug)]
-                if not sub.empty:
-                    hits.append(sub)
+                for _, erow in ev_ind.iterrows():
+                    key = erow["drug_key"]
+                    if key != "" and key in drug:
+                        hits_rows.append(erow)
+            if len(hits_rows) == 0:
+                st.info("Die Wirkstoffe dieses Präparats werden nicht in der Leitlinie genannt.")
+                return
 
-            if not hits:
-                st.info("Die Wirkstoffe dieses Präparates werden nicht in der Leitlinie genannt oder es existiert keine Leitlinie zu der Indikation.")
-            else:
-                hits_df = pd.concat(hits).drop_duplicates()
+            hits_df = pd.DataFrame(hits_rows).drop_duplicates()
 
-                #wenn mehrere Wirkstoffe derselben ws_gruppe matchen: alle unter "drug" auflisten
-                grouped = (
-                    hits_df
-                    .groupby(["ind", "ws_gruppe", "recom", "source", "stand"], dropna=False)["drug_kw"]
-                    .apply(lambda s: ", ".join(sorted({x.title() for x in s})))
-                    .reset_index(name="drug_list")
-                    .sort_values(["ind", "ws_gruppe"])
-                )
+            #gruppieren der treffer
+            groups = {}
+            for _, r in hits_df.iterrows():
+                group_key = (r.get("ind"), r.get("ws_gruppe"), r.get("recom"), r.get("source"), r.get("stand"))
+                drug_key = r.get("drug_key", "")
 
-                #Ausgabe
-                for ind, part in grouped.groupby("ind", sort=False):
+                if group_key not in groups:
+                    groups[group_key] = set()
+                groups[group_key].add(drug_key)
+
+            #ausgabe vorbereiten
+            output_rows = []
+            for group_key, drug_key in groups.items():
+                ind, ws_gruppe, recom, source, stand = group_key
+                kws_pretty = []
+                for x in sorted(list(drug_key)):
+                    kws_pretty.append(x.title())
+                drug_list_text = ", ".join(kws_pretty)
+                output_rows.append((ind, ws_gruppe, recom, source, stand, drug_list_text))
+
+            output_rows.sort(key=lambda x: (str(x[0]), str(x[1])))
+
+            #anzeigen nach indikation
+            current_ind = None
+            for (ind, ws_gruppe, recom, source, stand, drug_list_text) in output_rows:
+                if ind != current_ind:
                     st.markdown(f"**Bei {ind}:**")
-                    for _, r2 in part.iterrows():
-                        st.info(
-                            f"- {r2['ws_gruppe']} ({r2['drug_list']}) "
-                            f"**{r2['recom']}** ({r2['source']}, Stand: {r2['stand']})"
-                        )
+                    current_ind = ind
+                st.info(f"- {ws_gruppe} ({drug_list_text}) **{recom}** ({source}, Stand: {stand})")
 
     with col3:
         img_path = find_image_for_pzn(row["pzn"])
         if img_path:
             st.image(str(img_path), width="content", caption=f"Copyright: {row['image_cr']}")
 
-#hauptbereich
+#HAUPTBEREICH
 st.subheader("Präparateübersicht")
 
 display_df = filtered[["handelsname", "indication", "drug", "drf"]].rename(
@@ -238,10 +346,7 @@ display_df = filtered[["handelsname", "indication", "drug", "drf"]].rename(
     }
 )
 
-st.dataframe(
-    display_df,
-    hide_index=True,
-)
+st.dataframe(display_df, hide_index=True)
 
 auswahl = st.selectbox("Präparat auswählen", options=filtered["handelsname"].unique())
 
@@ -251,6 +356,7 @@ if auswahl:
 
 st.divider()
 
+#infos zur app etc
 st.caption('''© 2025 · Tanjana Harings · Lehrtool für das Praktikum „Krankheitslehre I - Übungsapotheke"''')
 
 with st.expander("Über diese App"):
