@@ -31,7 +31,8 @@ def split_semicolon(text) -> list:
 
 #bild zur pzn im IMAGES_DIR finden
 def find_image_for_pzn(pzn):
-    pzn = str(pzn).strip()
+    pzn = str(pzn)
+    pzn = "".join(ch for ch in pzn if ch.isdigit()).zfill(8)
     matches = list(IMAGES_DIR.glob(f"{pzn}.*"))
     if len(matches) > 0:
         return matches[0]
@@ -44,7 +45,7 @@ def load_data():
     #spalten vereinheitlichen
     df.columns = [norm(c) for c in df.columns]
     #pzn sauber formatieren (8-stellig, führende Nullen)
-    df["pzn"] = df["pzn"].astype(str).str.strip().str.zfill(8)
+    df["pzn"] = (df["pzn"].astype(str).str.replace(r"\D", "", regex=True).str.zfill(8))
     #plant normalisieren
     if "plant" in df.columns:
         df["plant"] = df["plant"].fillna("").apply(norm)
@@ -281,58 +282,56 @@ def show_details(row: pd.Series):
 
             if len(ev_ind_rows) == 0:
                 st.info("Keine Leitlinie zur Indikation gefunden.")
-                return
+            else:
+                ev_ind = pd.DataFrame(ev_ind_rows)
 
-            ev_ind = pd.DataFrame(ev_ind_rows)
+                #treffer für wirkstoff in evidenzdaten
+                hits_rows = []
+                for drug in drug_list:
+                    for _, erow in ev_ind.iterrows():
+                        key = erow["drug_key"]
+                        if key != "" and key in drug:
+                            hits_rows.append(erow)
 
-            #treffer für wirkstoff in evidenzdaten
-            hits_rows = []
+                if len(hits_rows) == 0:
+                    st.info("Die Wirkstoffe dieses Präparats werden nicht in der Leitlinie genannt.")
+                else:
+                    hits_df = pd.DataFrame(hits_rows).drop_duplicates()
 
-            for drug in drug_list:
-                for _, erow in ev_ind.iterrows():
-                    key = erow["drug_key"]
-                    if key != "" and key in drug:
-                        hits_rows.append(erow)
-            if len(hits_rows) == 0:
-                st.info("Die Wirkstoffe dieses Präparats werden nicht in der Leitlinie genannt.")
-                return
+                    #gruppieren der treffer
+                    groups = {}
+                    for _, r in hits_df.iterrows():
+                        group_key = (r.get("ind"), r.get("ws_gruppe"), r.get("recom"), r.get("source"), r.get("stand"))
+                        drug_key = r.get("drug_key", "")
 
-            hits_df = pd.DataFrame(hits_rows).drop_duplicates()
+                        if group_key not in groups:
+                            groups[group_key] = set()
+                        groups[group_key].add(drug_key)
 
-            #gruppieren der treffer
-            groups = {}
-            for _, r in hits_df.iterrows():
-                group_key = (r.get("ind"), r.get("ws_gruppe"), r.get("recom"), r.get("source"), r.get("stand"))
-                drug_key = r.get("drug_key", "")
+                    #ausgabe vorbereiten
+                    output_rows = []
+                    for group_key, drug_key in groups.items():
+                        ind, ws_gruppe, recom, source, stand = group_key
+                        kws_pretty = []
+                        for x in sorted(list(drug_key)):
+                            kws_pretty.append(x.title())
+                        drug_list_text = ", ".join(kws_pretty)
+                        output_rows.append((ind, ws_gruppe, recom, source, stand, drug_list_text))
 
-                if group_key not in groups:
-                    groups[group_key] = set()
-                groups[group_key].add(drug_key)
+                    output_rows.sort(key=lambda x: (str(x[0]), str(x[1])))
 
-            #ausgabe vorbereiten
-            output_rows = []
-            for group_key, drug_key in groups.items():
-                ind, ws_gruppe, recom, source, stand = group_key
-                kws_pretty = []
-                for x in sorted(list(drug_key)):
-                    kws_pretty.append(x.title())
-                drug_list_text = ", ".join(kws_pretty)
-                output_rows.append((ind, ws_gruppe, recom, source, stand, drug_list_text))
-
-            output_rows.sort(key=lambda x: (str(x[0]), str(x[1])))
-
-            #anzeigen nach indikation
-            current_ind = None
-            for (ind, ws_gruppe, recom, source, stand, drug_list_text) in output_rows:
-                if ind != current_ind:
-                    st.markdown(f"**Bei {ind}:**")
-                    current_ind = ind
-                st.info(f"- {ws_gruppe} ({drug_list_text}) **{recom}** ({source}, Stand: {stand})")
+                    #anzeigen nach indikation
+                    current_ind = None
+                    for (ind, ws_gruppe, recom, source, stand, drug_list_text) in output_rows:
+                        if ind != current_ind:
+                            st.markdown(f"**Bei {ind}:**")
+                            current_ind = ind
+                        st.info(f"- {ws_gruppe} ({drug_list_text}) **{recom}** ({source}, Stand: {stand})")
 
     with col3:
         img_path = find_image_for_pzn(row["pzn"])
         if img_path:
-            st.image(str(img_path), width="content", caption=f"Copyright: {row['image_cr']}")
+            st.image(str(img_path), width="content" ,caption=f"Copyright: {row['image_cr']}")
 
 #HAUPTBEREICH
 st.subheader("Präparateübersicht")
